@@ -17,7 +17,7 @@ public Plugin myinfo = {
 	name = "Map List Bridge",
 	author = "Mr. Burguers",
 	description = "Operations related to the map list",
-	version = "1.3",
+	version = "1.4",
 	url = "https://tf2maps.net/home/"
 };
 
@@ -42,6 +42,8 @@ public void OnPluginStart() {
 	g_hCVarMinPlayers = CreateConVar("maplistbridge_players", "4", "Minimum players to consider the map as played.", 0, true, 1.0, true, 32.0);
 
 	g_hTVEnabled = FindConVar("tv_enable");
+
+	RegConsoleCmd("sm_notes", CommandNotes, "Show this map's bot notes");
 
 	HookEvent("teamplay_round_start", SendNotes, EventHookMode_PostNoCopy);
 	HookEvent("player_team", CheckMap, EventHookMode_PostNoCopy);
@@ -99,18 +101,71 @@ void OnMapDataRetrieved(Database db, DBResultSet results, const char[] error, an
 	g_bDataLoaded = true;
 }
 
+Action CommandNotes(int client, int args) {
+	if (client) {
+		if (!g_bDataLoaded) {
+			PrintToChat(client, "\x04No map notes\x01, this map is not in the map list.");
+		} else if (!g_bHasNotes) {
+			PrintToChat(client, "\x04No map notes\x01 were provided for this map.");
+		} else {
+			PrintToChat(client, "\x01------- \x04Map Notes \x01-------");
+			PrintToChat(client, "%s", g_sMapNotes);
+			PrintToChat(client, "-------------------------");
+		}
+	}
+
+	return Plugin_Handled;
+}
+
 void SendNotes(Event event, const char[] name, bool dontBroadcast) {
-	if (!g_bDataLoaded || FB2_IsFbRoundActive()) {
+	if (!g_bDataLoaded) {
 		return;
 	}
 
 	PrintToChatAll("\x04Map Thread\x01: %s", g_sMapURL);
 
 	if (g_bHasNotes) {
+		// Feedback round has its own chat and center text notifications
+		// Don't show notes in chat, only center text and only after a delay
+		if (FB2_IsFbRoundActive()) {
+			CreateTimer(11.0, TimerSendCenterNotes, _, TIMER_FLAG_NO_MAPCHANGE);
+			return;
+		}
+
 		PrintToChatAll("\x01------- \x04Map Notes \x01-------");
 		PrintToChatAll("%s", g_sMapNotes);
 		PrintToChatAll("-------------------------");
+
+		SendCenterNotes();
 	}
+}
+
+void SendCenterNotes() {
+	char sCenterMapNotes[240];
+	strcopy(sCenterMapNotes, sizeof(sCenterMapNotes), g_sMapNotes);
+
+	// Add line breaks after periods or in long lines
+	int i = 0;
+	char c;
+	bool bWasDot = false;
+	int iLineSize = 0;
+	for (; c = sCenterMapNotes[i]; ++i, ++iLineSize) {
+		if (c == '.') {
+			bWasDot = true;
+		} else {
+			if (c == ' ' && (bWasDot || iLineSize >= 50)) {
+				sCenterMapNotes[i] = '\n';
+				iLineSize = 0;
+			}
+			bWasDot = false;
+		}
+	}
+
+	PrintCenterTextAll("%s", sCenterMapNotes);
+}
+
+void TimerSendCenterNotes(Handle timer) {
+	SendCenterNotes();
 }
 
 void CheckMap(Event event, const char[] name, bool dontBroadcast) {
