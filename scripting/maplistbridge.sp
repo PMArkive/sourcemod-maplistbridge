@@ -17,7 +17,7 @@ public Plugin myinfo = {
 	name = "Map List Bridge",
 	author = "Mr. Burguers",
 	description = "Operations related to the map list",
-	version = "1.4",
+	version = "1.5",
 	url = "https://tf2maps.net/home/"
 };
 
@@ -30,9 +30,9 @@ ConVar g_hTVEnabled;
 
 char g_sMapName[64];
 char g_sDiscordID[64];
-char g_sMapURL[240];
+char g_sMapURL[236];
 bool g_bHasNotes;
-char g_sMapNotes[240];
+char g_sMapNotes[250];
 
 bool g_bDataLoaded;
 bool g_bMapRemoved;
@@ -45,14 +45,14 @@ public void OnPluginStart() {
 
 	RegConsoleCmd("sm_notes", CommandNotes, "Show this map's bot notes");
 
-	HookEvent("teamplay_round_start", SendNotes, EventHookMode_PostNoCopy);
+	HookEvent("teamplay_round_start", OnRoundStart, EventHookMode_PostNoCopy);
 	HookEvent("player_team", CheckMap, EventHookMode_PostNoCopy);
 
 	ConnectToDatabase();
 }
 
 public void OnPluginEnd() {
-	UnhookEvent("teamplay_round_start", SendNotes, EventHookMode_PostNoCopy);
+	UnhookEvent("teamplay_round_start", OnRoundStart, EventHookMode_PostNoCopy);
 	UnhookEvent("player_team", CheckMap, EventHookMode_PostNoCopy);
 
 	DisconnectFromDatabase();
@@ -87,14 +87,10 @@ void OnMapDataRetrieved(Database db, DBResultSet results, const char[] error, an
 	results.FetchString(1, g_sMapURL, sizeof(g_sMapURL));
 	g_bHasNotes = false;
 	if (!results.IsFieldNull(2)) {
-		results.FetchString(2, g_sMapNotes, sizeof(g_sMapNotes));
-		int iNoteLength = strlen(g_sMapNotes);
-		if (iNoteLength > 0) {
+		int iCopied = results.FetchString(2, g_sMapNotes, sizeof(g_sMapNotes));
+		if (iCopied > 0) {
 			g_bHasNotes = true;
-			// Replace ending with "(...)" if notes didn't fit
-			if (iNoteLength == sizeof(g_sMapNotes) - 1) {
-				strcopy(g_sMapNotes[sizeof(g_sMapNotes) - 6], 6, "(...)");
-			}
+			PutEllipsis(g_sMapNotes, sizeof(g_sMapNotes), iCopied);
 		}
 	}
 
@@ -117,7 +113,13 @@ Action CommandNotes(int client, int args) {
 	return Plugin_Handled;
 }
 
-void SendNotes(Event event, const char[] name, bool dontBroadcast) {
+void OnRoundStart(Event event, const char[] name, bool dontBroadcast) {
+	// In case the feedback round plugin hooks the event after this plugin does
+	// Wait a frame so it consistently sets FB2_IsFbRoundActive
+	RequestFrame(SendNotes);
+}
+
+void SendNotes() {
 	if (!g_bDataLoaded) {
 		return;
 	}
@@ -128,7 +130,7 @@ void SendNotes(Event event, const char[] name, bool dontBroadcast) {
 		// Feedback round has its own chat and center text notifications
 		// Don't show notes in chat, only center text and only after a delay
 		if (FB2_IsFbRoundActive()) {
-			CreateTimer(11.0, TimerSendCenterNotes, _, TIMER_FLAG_NO_MAPCHANGE);
+			CreateTimer(11.0, SendCenterNotes, _, TIMER_FLAG_NO_MAPCHANGE);
 			return;
 		}
 
@@ -136,13 +138,15 @@ void SendNotes(Event event, const char[] name, bool dontBroadcast) {
 		PrintToChatAll("%s", g_sMapNotes);
 		PrintToChatAll("-------------------------");
 
-		SendCenterNotes();
+		// Delay to prevent player respawns sometimes clearing this text
+		CreateTimer(0.2, SendCenterNotes, _, TIMER_FLAG_NO_MAPCHANGE);
 	}
 }
 
-void SendCenterNotes() {
-	char sCenterMapNotes[240];
-	strcopy(sCenterMapNotes, sizeof(sCenterMapNotes), g_sMapNotes);
+void SendCenterNotes(Handle timer) {
+	char sCenterMapNotes[219];
+	int iCopied = strcopy(sCenterMapNotes, sizeof(sCenterMapNotes), g_sMapNotes);
+	PutEllipsis(sCenterMapNotes, sizeof(sCenterMapNotes), iCopied);
 
 	// Add line breaks after periods or in long lines
 	int i = 0;
@@ -161,11 +165,13 @@ void SendCenterNotes() {
 		}
 	}
 
-	PrintCenterTextAll("%s", sCenterMapNotes);
-}
-
-void TimerSendCenterNotes(Handle timer) {
-	SendCenterNotes();
+	// Center position, 10 seconds, white color, no fade
+	SetHudTextParams(-1.0, -1.0, 10.0, 255, 255, 255, 255, 0, _, 0.0, 0.0);
+	for (int client = 1; client <= MaxClients; client++) {
+		if (IsClientInGame(client)) {
+			ShowHudText(client, -1, "%s", sCenterMapNotes);
+		}
+	}
 }
 
 void CheckMap(Event event, const char[] name, bool dontBroadcast) {
@@ -220,6 +226,12 @@ void SendDiscordMessage(DataPack data) {
 }
 
 // ---------- Utility functions ---------- //
+
+void PutEllipsis(char[] sBuffer, int iBufferSize, int iLength) {
+	if (iLength == iBufferSize - 1) {
+		strcopy(sBuffer[iBufferSize - 6], 6, "(...)");
+	}
+}
 
 int GetConnectedPlayers() {
 	int iPlayerCount = GetClientCount(false); // Do count connecting clients
